@@ -1,0 +1,174 @@
+---
+title: "Day 01 Challenge - Bivariate"
+author: "Jun, Youngsang"
+date: "October 17, 2024"
+output: 
+  html_document: 
+    theme: readable
+    code_folding: hide
+editor_options: 
+  markdown: 
+---
+
+Setup
+```{r setup, warning = FALSE, message = FALSE, results = "hide"}
+# Load necessary libraries
+library(tidycensus)
+library(tidyverse)
+library(sf)
+library(terra)
+library(rgeoboundaries)
+remotes::install_github("mikejohnson51/climateR")
+library(climateR)
+library(biscale)
+library(cowplot)
+library(ggtext)
+library(glue)
+library(ggpattern)
+
+source("helper_functions.R")
+source("theme/theme_swd.R")
+``` 
+Data
+``` {r data, warning = FALSE, message = FALSE, results = "hide"}
+# Set ACS API Key
+census_api_key("b2835f54d89a4499ba29829c908967b86765b345", overwrite = TRUE)
+
+tracts22 <-  
+  get_acs(geography = "tract",
+          variables = c("B08134_001E","B08134_002E","B08134_003E","B08134_004E","B08134_005E","B08134_006E","B08134_007E","B08134_008E","B08134_009E","B08134_010E",
+                        "B19013_001E"), 
+          year=2022, state="PA",
+          county="Philadelphia", geometry=TRUE)
+
+tracts22_b <-  
+  get_acs(geography = "tract",
+          variables = c("B08134_001E","B08134_002E","B08134_003E","B08134_004E","B08134_005E","B08134_006E","B08134_007E","B08134_008E","B08134_009E","B08134_010E",
+                        "B19013_001E"), 
+          year=2022, state="PA",
+          county="Philadelphia", geometry=TRUE)
+
+tracts22 <- 
+  tracts22 %>%
+  dplyr::select( -NAME, -moe) %>%
+  spread(key = variable, value = estimate) %>%
+  rename(TotalPop = B08134_001, 
+         B_less_than_10_min = B08134_002, 
+         B10_14_min = B08134_003,
+         B15_19_min = B08134_004,
+         B20_24_min = B08134_005,
+         B25_29_min = B08134_006,
+         B30_34_min = B08134_007,
+         B35_44_min = B08134_008,         
+         B45_59_min = B08134_009,
+         B60_min_or_more = B08134_010,        
+         MedHHInc = B19013_001) 
+tracts22 <- 
+  tracts22 %>%
+  mutate(travelTime = ifelse(TotalPop > 0, ((B_less_than_10_min*5 + B10_14_min*12.5 + B15_19_min*17.5+B20_24_min*22.5+B25_29_min*27.5+B30_34_min*32.5+B35_44_min*40+B45_59_min*52.5+B60_min_or_more*67.5) / TotalPop), 0)) 
+
+tracts22 <-  tracts22 %>%
+  filter(!is.na(tracts22$MedHHInc))
+
+var1 <- tracts22$MedHHInc
+var2 <- tracts22$travelTime
+
+tracts22 <-  tracts22 %>%
+  mutate(MedHHInc_norm = (var1 - min(var1)) / (max(var1) - min(var1)),
+         travelTime_norm = (var2 - min(var2)) / (max(var2) - min(var2)))
+``` 
+Graph
+``` {r graph, warning = FALSE, message = FALSE}
+# Define the color palette for the bivariate map
+bivariate_color <- function(var1, var2) {
+  rgb(
+    (211-53*var1-145*var2+36*var1*var2)/255,
+    (211-158*var1-90*var2+67*var1*var2)/255,
+    (211-140*var1-35*var2+23*var1*var2)/255,
+    maxColorValue = 1)
+}
+
+tracts22$bivariate_color <- mapply(bivariate_color, tracts22$MedHHInc_norm, tracts22$travelTime_norm)
+
+pallet <- "DkViolet2"
+
+# Define colors for the annotations
+blue_color <- "#4279B0"  # Blue for long travel time and low income
+red_color <- "#9E3547"  # Red for short travel time and high income
+gray_color <- "#D3D3D3"  # Gray for short travel time and low income
+purple_color <- "#311E3B"  # Purple for long travel time and high income
+
+# Define the title using colored text in subtitle with ggtext
+title_text <- glue("<span style='color:{red_color};'>**Med Household Income**</span> ($15K-181K) and <span style='color:{blue_color};'>**Travel Time to Work**</span> (17-45 min) patterns")
+
+annotation_text_LL <- glue("Long Travel Time \n Low Med Income")
+annotation_text_LH <- glue("Short Travel Time \n High Med Income")
+annotation_text_HL <- glue("Short Travel Time \n Low Med Income")
+annotation_text_HH <- glue("Long Travel Time \n High Med Income")
+
+# Create the map with colored subtitle, annotations, and leader lines
+map <- ggplot() +
+  theme_void(base_size = 14) +
+  xlim(-75.3, -74.95) +  # Set x-axis limits for the map (longitude range)
+  ylim(39.85, 40.15) +  # Set y-axis limits for the map (latitude range)
+#  geom_sf( fill="#939393", color=NA)+
+  geom_sf_pattern(data=st_union(tracts22_b),  
+                  fill = "#939393",                
+                  pattern = "stripe",            
+                  pattern_fill = "#939393",         
+                  pattern_angle = 45,           
+                  pattern_density = 0.2,         
+                  pattern_spacing = 0.01,
+                  pattern_alpha = 0.3
+  ) +
+  geom_sf(data=tracts22, aes(fill=bivariate_color), color=NA)+
+  scale_fill_identity() +
+  geom_sf(data=st_union(tracts22_b), fill=NA, color="black")+
+
+# Title and subtitle using ggtext for colored styling
+  labs(title = "Philadelphia: Household Income and Travel Time Pattern",
+       subtitle = title_text,
+       caption = "Source: U.S. Census Bureau ACS 2022") +
+  theme(plot.title = element_text(hjust = 0.38, size=12, face = "bold"),
+        plot.subtitle = element_markdown(hjust = 0.29, size = 9),  # Use element_markdown for ggtext
+        plot.caption = element_text(size = 6, hjust = 0)) +
+
+  # Add the colored annotations with leader lines
+  annotate("text", x = -75.09, y = 39.89, label = annotation_text_LH, color = red_color, size = 2.5, fontface = "bold", hjust=0) +
+  annotate("text", x = -75.15, y = 40.114, label = annotation_text_LL, color = blue_color, size = 2.5, fontface = "bold") +
+  annotate("text", x = -75.09, y = 39.96, label = annotation_text_HL, color = gray_color, size = 2.5, fontface = "bold", hjust=0) +
+  annotate("text", x = -75.17, y = 39.85, label = annotation_text_HH, color = purple_color, size = 2.5, fontface = "bold", hjust=0) +
+  
+  # Add leader lines to the annotations
+  geom_segment(aes(x = -75.165, xend = -75.1, y = 39.948, yend = 39.90), color = red_color, size = 0.8) +
+  geom_segment(aes(x = -75.15, xend = -75.15, y = 40.02, yend = 40.10), color = blue_color, size = 0.8) +
+  geom_segment(aes(x = -75.168, xend = -75.18, y = 39.952, yend = 39.85), color = purple_color, size = 0.8) +
+  geom_segment(aes(x = -75.19, xend = -75.10, y = 39.95, yend = 39.96), color = gray_color, size = 0.8) +
+
+
+# Add point lines to the end of the line
+  geom_point(aes(x = -75.1, y = 39.90), color = red_color, size = 3) +
+  geom_point(aes(x = -75.15, y = 40.10), color = blue_color, size = 3) +
+  geom_point(aes(x = -75.18, y = 39.85), color = purple_color, size = 3) +
+  geom_point(aes(x = -75.1, y = 39.96), color = gray_color, size = 3)
+  
+# Legend
+legend <- bi_legend(pal = pallet,   
+                    flip_axes = FALSE,
+                    rotate_pal = FALSE,
+                    dim = 4,
+                    xlab = "Median Household Income",
+                    ylab = "Travel Time to Work",
+                    size = 5)
+
+# Combine map and legend using cowplot
+finalPlot <- ggdraw() +
+  draw_plot(legend, 0.05, 0.05, 0.28, 0.28) +
+  draw_plot(map, 0, 0, 1, 1) 
+
+
+# Display the final map with text annotations and leader lines
+finalPlot %>% 
+  save_and_show_plot(width = 5, height = 4, "FIG0206.png")
+```
+
